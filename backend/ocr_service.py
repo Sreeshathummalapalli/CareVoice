@@ -18,8 +18,17 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 def get_ocr_engine():
     try:
         from rapidocr_onnxruntime import RapidOCR
-    except ImportError as exc:
-        raise RuntimeError("OCR is not installed. Install the project requirements and try again.") from exc
+    except ModuleNotFoundError as exc:
+        missing_module = exc.name or "an OCR dependency"
+        raise RuntimeError(
+            f"RapidOCR dependency '{missing_module}' is unavailable. "
+            "Rebuild the deployment from requirements.txt and check its Python version."
+        ) from exc
+    except (ImportError, OSError) as exc:
+        raise RuntimeError(
+            f"RapidOCR could not load ({type(exc).__name__}: {exc}). "
+            "Check the deployment build logs and Python version."
+        ) from exc
     return RapidOCR()
 
 

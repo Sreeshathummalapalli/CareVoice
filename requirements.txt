@@ -1,7 +1,7 @@
 groq
 pypdf
 PyMuPDF
-rapidocr-onnxruntime
+rapidocr-onnxruntime==1.2.3
 SpeechRecognition
 pyttsx3
 python-dotenv
