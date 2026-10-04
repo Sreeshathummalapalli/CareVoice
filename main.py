@@ -2322,9 +2322,23 @@ def render_onboarding_page():
 # -----------------------------------------------------------------------------
 # 5. AUTHENTICATED PATIENT APP VIEW
 # -----------------------------------------------------------------------------
-def render_reminder_audio_listener(user_id, user_name, lang_code, voice_gender):
+def render_reminder_audio_listener(user_id, user_name, lang_code, voice_gender, show_controls=False):
         safe_user_id = json.dumps(str(user_id))
         reminder_date = datetime.datetime.now().strftime("%Y-%m-%d")
+        is_te = str(lang_code).lower().startswith("te")
+        voice_control = ""
+        component_height = 1
+        if show_controls:
+                enable_label = "🔊 వాయిస్ రిమైండర్‌లను ప్రారంభించండి" if is_te else "🔊 Enable voice reminders"
+                voice_control = f"""
+                    <div id="voice-control" style="padding:8px 0;text-align:left;">
+                      <button id="enable-voice" type="button" style="min-height:42px;padding:8px 14px;border:0;border-radius:10px;background:#166534;color:#fff;font-weight:700;">
+                        {enable_label}
+                      </button>
+                      <span id="voice-control-status" role="status" style="margin-left:8px;color:#166534;"></span>
+                    </div>
+                """
+                component_height = 58
         schedules = db.get_active_reminder_schedules()
         medicine_logs = db.get_medicine_logs_for_date(user_id, reminder_date)
         reminders = reminder_worker.build_in_app_reminders(
@@ -2343,26 +2357,72 @@ def render_reminder_audio_listener(user_id, user_name, lang_code, voice_gender):
         safe_lang = json.dumps(lang_code)
         safe_gender = json.dumps(str(voice_gender).lower())
         st.components.v1.html(f"""
+                {voice_control}
                 <script>
                     (() => {{
                         const userId = {safe_user_id};
                         const selectedLanguage = {safe_lang};
                         const voiceGender = {safe_gender};
                         const scheduledReminders = {safe_reminders};
-                        const speakReminder = (reminder, attempts = 0) => {{
+                        const pendingReminderKeys = new Set();
+                        const reminderAudioPlayer = new Audio();
+                        const silentAudioSource = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=";
+                        const voiceEnabledKey = `carevoice-voice-reminders-${{userId}}`;
+                        const enableVoiceButton = document.getElementById("enable-voice");
+                        const voiceControlStatus = document.getElementById("voice-control-status");
+                        if (enableVoiceButton) {{
+                            try {{
+                                if (localStorage.getItem(voiceEnabledKey) === "1") {{
+                                    enableVoiceButton.hidden = true;
+                                    if (voiceControlStatus) voiceControlStatus.textContent = {json.dumps("వాయిస్ రిమైండర్‌లు ప్రారంభించబడ్డాయి." if is_te else "Voice reminders are enabled.")};
+                                }}
+                            }} catch (error) {{}}
+                            enableVoiceButton.addEventListener("click", () => {{
+                                reminderAudioPlayer.muted = true;
+                                reminderAudioPlayer.src = silentAudioSource;
+                                const unlockPlayback = reminderAudioPlayer.play();
+                                if (unlockPlayback && typeof unlockPlayback.then === "function") {{
+                                    unlockPlayback.then(() => {{
+                                        reminderAudioPlayer.pause();
+                                        reminderAudioPlayer.currentTime = 0;
+                                        reminderAudioPlayer.muted = false;
+                                    }}).catch(() => {{ reminderAudioPlayer.muted = false; }});
+                                }}
+                                if ("speechSynthesis" in window) window.speechSynthesis.resume();
+                                try {{ localStorage.setItem(voiceEnabledKey, "1"); }} catch (error) {{}}
+                                enableVoiceButton.hidden = true;
+                                if (voiceControlStatus) voiceControlStatus.textContent = {json.dumps("వాయిస్ రిమైండర్‌లు ప్రారంభించబడ్డాయి. యాప్ తెరిచి ఉంచండి." if is_te else "Voice reminders enabled. Keep CareVoice open for spoken alerts.")};
+                            }});
+                        }}
+                        const markReminderSpoken = (spokenKey) => {{
+                            try {{ localStorage.setItem(spokenKey, "spoken"); }} catch (error) {{}}
+                        }};
+                        const fallbackAudio = (reminder, spokenKey) => {{
+                            if (!reminder.audio) return Promise.resolve(false);
+                            reminderAudioPlayer.pause();
+                            reminderAudioPlayer.src = reminder.audio;
+                            reminderAudioPlayer.currentTime = 0;
+                            reminderAudioPlayer.muted = false;
+                            return reminderAudioPlayer.play().then(() => {{
+                                markReminderSpoken(spokenKey);
+                                return true;
+                            }}).catch(() => false);
+                        }};
+                        const speakReminder = (reminder, spokenKey, attempts = 0) => {{
                             const lang = reminder.lang || selectedLanguage || "en-IN";
                             const languagePrefix = lang.slice(0, 2).toLowerCase();
-                            const fallbackAudio = () => {{
-                                if (!reminder.audio) return;
-                                const audio = new Audio(reminder.audio);
-                                audio.play().catch(() => {{}});
-                            }};
-                            if (!("speechSynthesis" in window)) {{ fallbackAudio(); return; }}
+                            if (!("speechSynthesis" in window) || !("SpeechSynthesisUtterance" in window)) {{
+                                return fallbackAudio(reminder, spokenKey);
+                            }}
                             const voices = window.speechSynthesis.getVoices();
                             const languageVoices = voices.filter(voice => voice.lang.toLowerCase().startsWith(languagePrefix));
-                            if (!voices.length && attempts < 8) {{
-                                window.setTimeout(() => speakReminder(reminder, attempts + 1), 150);
-                                return;
+                            if ((!voices.length || (languagePrefix === "te" && !languageVoices.length)) && attempts < 30) {{
+                                return new Promise(resolve => {{
+                                    window.setTimeout(
+                                        () => resolve(speakReminder(reminder, spokenKey, attempts + 1)),
+                                        200
+                                    );
+                                }});
                             }}
                             const femaleHints = ["female", "zira", "heera", "samantha", "susan", "hazel", "catherine", "victoria", "karen", "aria", "emma", "ava", "jenny", "michelle", "sonia", "libby", "natasha", "moira"];
                             const maleHints = ["david", "mark", "george", "ravi", "alex", "daniel", "guy", "ryan", "tony", "thomas", "oliver", "liam", "eric", "andrew"];
@@ -2373,19 +2433,50 @@ def render_reminder_audio_listener(user_id, user_name, lang_code, voice_gender):
                                 return !femaleHints.some(hint => name.includes(hint)) &&
                                     (hints.some(hint => name.includes(hint)) || /(^|[\\s-])male($|[\\s-])/.test(name));
                             }};
-                            const selectedVoice = languageVoices.find(matchesGender) || voices.find(matchesGender);
-                            if (!selectedVoice) {{ fallbackAudio(); return; }}
+                            const selectedVoice = languageVoices.find(matchesGender)
+                                || (languagePrefix === "te" ? null : languageVoices[0]);
+                            if (!selectedVoice) return fallbackAudio(reminder, spokenKey);
                             const utterance = new SpeechSynthesisUtterance(reminder.body);
                             utterance.lang = lang;
-                            if (selectedVoice) utterance.voice = selectedVoice;
-                            utterance.onerror = fallbackAudio;
-                            window.speechSynthesis.speak(utterance);
+                            utterance.voice = selectedVoice;
+                            return new Promise(resolve => {{
+                                let completed = false;
+                                let fallbackStarted = false;
+                                let startTimeout = null;
+                                const finish = played => {{
+                                    if (completed) return;
+                                    completed = true;
+                                    if (startTimeout !== null) window.clearTimeout(startTimeout);
+                                    resolve(played);
+                                }};
+                                const useAudioFallback = () => {{
+                                    if (fallbackStarted || completed) return;
+                                    fallbackStarted = true;
+                                    if (startTimeout !== null) window.clearTimeout(startTimeout);
+                                    window.speechSynthesis.cancel();
+                                    fallbackAudio(reminder, spokenKey).then(finish);
+                                }};
+                                utterance.onstart = () => {{
+                                    if (fallbackStarted || completed) return;
+                                    markReminderSpoken(spokenKey);
+                                    finish(true);
+                                }};
+                                utterance.onerror = useAudioFallback;
+                                try {{
+                                    window.speechSynthesis.speak(utterance);
+                                    startTimeout = window.setTimeout(useAudioFallback, 3000);
+                                }} catch (error) {{
+                                    useAudioFallback();
+                                }}
+                            }});
                         }};
                         const playOnce = (reminder) => {{
                             if (!reminder || String(reminder.user_id) !== String(userId)) return;
                             const spokenKey = `carevoice-spoken-${{reminder.delivery_key}}`;
-                            try {{ if (localStorage.getItem(spokenKey)) return; localStorage.setItem(spokenKey, "spoken"); }} catch (error) {{}}
-                            speakReminder(reminder);
+                            try {{ if (localStorage.getItem(spokenKey)) return; }} catch (error) {{}}
+                            if (pendingReminderKeys.has(spokenKey)) return;
+                            pendingReminderKeys.add(spokenKey);
+                            speakReminder(reminder, spokenKey).finally(() => pendingReminderKeys.delete(spokenKey));
                         }};
                         const checkScheduledReminders = () => {{
                             const now = new Date();
@@ -2414,7 +2505,7 @@ def render_reminder_audio_listener(user_id, user_name, lang_code, voice_gender):
                         }}
                     }})();
                 </script>
-        """, height=1)
+        """, height=component_height)
 
 
 def render_authenticated_app():
@@ -2435,6 +2526,7 @@ def render_authenticated_app():
         user_name,
         st.session_state.lang_code,
         st.session_state.get("voice_gender", "Female Voice"),
+        show_controls=st.session_state.current_page == "Settings",
     )
     render_active_medicine_reminder_banner()
     nav.render_mobile_drawer(
@@ -2456,13 +2548,13 @@ def render_authenticated_app():
         """, unsafe_allow_html=True)
 
         nav_items = [
-            ("Home" if not is_te else "హోమ్", "🏠", "ముఖ్య వివరాలు" if is_te else "Dashboard", "Home"),
-            ("Medicines" if not is_te else "నా మందులు", "💊", "మందుల పట్టిక" if is_te else "My Active Medicines", "Medicines"),
-            ("Prescriptions" if not is_te else "ప్రిస్క్రిప్షన్", "📋", "ప్రిస్క్రిప్షన్ అప్‌లోడ్" if is_te else "OCR Prescription Upload", "Prescriptions"),
-            ("Health" if not is_te else "నా ఆరోగ్యం", "🩺", "ఆరోగ్య రీడింగ్స్" if is_te else "My Health & Vitals", "Health"),
-            ("Diet" if not is_te else "ఆహార సలహాలు", "🥗", "పోషకాహార ప్లాన్" if is_te else "Nutrition Guidance", "Diet"),
-            ("Voice Assistant" if not is_te else "వాయిస్ అసిస్టెంట్", "🎙️", "వాయిస్ హెల్ప్" if is_te else "CareVoice Siri Hub", "Voice Assistant"),
-            ("Settings" if not is_te else "సెట్టింగ్స్", "⚙️", "ఖాతా అమరికలు" if is_te else "Account Preferences", "Settings")
+            ("My Home" if not is_te else "నా హోమ్", "🏠", "ముఖ్య వివరాలు" if is_te else "Dashboard", "Home"),
+            ("My Medicines" if not is_te else "నా మందులు", "💊", "మందుల పట్టిక" if is_te else "My Active Medicines", "Medicines"),
+            ("My Prescriptions" if not is_te else "నా ప్రిస్క్రిప్షన్లు", "📋", "ప్రిస్క్రిప్షన్ అప్‌లోడ్" if is_te else "OCR Prescription Upload", "Prescriptions"),
+            ("My Health" if not is_te else "నా ఆరోగ్యం", "🩺", "ఆరోగ్య రీడింగ్స్" if is_te else "My Health & Vitals", "Health"),
+            ("My Diet" if not is_te else "నా ఆహారం", "🥗", "పోషకాహార ప్లాన్" if is_te else "Nutrition Guidance", "Diet"),
+            ("My Voice Assistant" if not is_te else "నా వాయిస్ సహాయకుడు", "🎙️", "వాయిస్ హెల్ప్" if is_te else "CareVoice Siri Hub", "Voice Assistant"),
+            ("My Settings" if not is_te else "నా సెట్టింగ్‌లు", "⚙️", "ఖాతా అమరికలు" if is_te else "Account Preferences", "Settings")
         ]
 
         for display_label, icon, desc, target_page in nav_items:
@@ -2470,7 +2562,6 @@ def render_authenticated_app():
             btn_label = f"{icon}  {display_label}"
             if st.button(btn_label, use_container_width=True, type="primary" if is_active else "secondary", key=f"sb_nav_{target_page}"):
                 st.session_state.current_page = target_page
-                st.rerun()
 
         st.markdown("---")
         st.caption("🌐 Language / భాష")
@@ -3069,7 +3160,7 @@ def render_authenticated_app():
 
     # --- 3. PRESCRIPTION OCR & AI PARSING PAGE ---
     elif page == "Prescriptions":
-        st.markdown("## 📋 ప్రిస్క్రిప్షన్ అప్‌లోడ్ చేయండి" if is_te else "## 📋 Upload Prescription")
+        st.markdown("## 📋 నా ప్రిస్క్రిప్షన్లను అప్‌లోడ్ చేయండి" if is_te else "## 📋 My Prescriptions — Upload Prescription")
 
         if st.session_state.rx_step == 1:
             rx_tab1, rx_tab2 = st.tabs(["📎 ఫైల్ జోడించండి", "📷 ఫోటో తీయండి"] if is_te else ["📎 Attach File", "📷 Take Photo"])
@@ -3590,12 +3681,13 @@ def render_authenticated_app():
 
     # --- 5. VOICE ASSISTANT PAGE ---
     elif page == "Voice Assistant":
+        st.markdown("## 🎙️ " + ("నా వాయిస్ సహాయకుడు" if is_te else "My Voice Assistant"))
         render_voice_assistant_box("hub")
 
     # --- 10. SETTINGS PAGE ---
     elif page == "Settings":
         is_te = st.session_state.lang_code == "te-IN"
-        st.markdown("## ⚙️ " + ("ఖాతా మరియు యాప్ సెట్టింగ్‌లు" if is_te else "Account & Application Settings"))
+        st.markdown("## ⚙️ " + ("నా ఖాతా మరియు యాప్ సెట్టింగ్‌లు" if is_te else "My Account & Application Settings"))
         
         st.markdown("### 👤 " + ("వినియోగదారు ప్రొఫైల్" if is_te else "User Profile"))
         st.write(f"{'పేరు' if is_te else 'Name'}: **{user_name}**")
@@ -3624,7 +3716,11 @@ def render_authenticated_app():
 
         st.markdown("---")
         st.markdown("### 🔔 " + ("వాయిస్ రిమైండర్‌లు" if is_te else "Voice Reminders"))
-        st.caption("ఈ ట్యాబ్ క్రియాశీలంగా లేకున్నా షెడ్యూల్ చేసిన మందుల రిమైండర్‌ల కోసం బ్రౌజర్ నోటిఫికేషన్‌లను ప్రారంభించండి." if is_te else "Enable browser notifications for scheduled medicine reminders, including when this tab is inactive.")
+        st.caption(
+            "వాయిస్ రిమైండర్‌ల కోసం పై బటన్‌ను ఒకసారి నొక్కండి. CareVoice తెరిచి ఉన్నప్పుడు అవి మాట్లాడతాయి; ట్యాబ్ మూసి ఉన్నప్పుడు బ్రౌజర్ నోటిఫికేషన్ మాత్రమే వస్తుంది."
+            if is_te else
+            "Tap the voice-reminders button above once. Spoken alerts work while CareVoice is open; when the tab is closed, the browser can deliver a notification but cannot speak."
+        )
         if st.session_state.get("push_setup_message"):
             st.success(st.session_state.push_setup_message)
 

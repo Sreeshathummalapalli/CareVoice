@@ -1,9 +1,10 @@
 (() => {
   const button = document.getElementById("mic");
-  const replayButton = document.getElementById("replay");
   const status = document.getElementById("status");
   const caption = document.getElementById("caption");
   const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const replyAudioPlayer = new Audio();
+  const silentAudioSource = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=";
   let recognition = null;
   let args = {};
   let currentReplyNonce = null;
@@ -18,8 +19,8 @@
     const telugu = String(args.lang_code || "en-IN").toLowerCase().startsWith("te");
     return {
       tap: telugu ? "మాట్లాడటానికి నొక్కండి" : "Tap to Speak",
-      replay: telugu ? "సమాధానాన్ని వినండి" : "Play reply",
       speaking: telugu ? "సమాధానం వినిపిస్తోంది..." : "Speaking reply...",
+      audioUnavailable: telugu ? "వాయిస్ ప్లే కాలేదు. బ్రౌజర్ వాయిస్ మరియు సౌండ్ సెట్టింగ్‌లను తనిఖీ చేయండి." : "Voice playback is unavailable. Check your browser voice and sound settings.",
       listening: telugu ? "వింటున్నాను..." : "Listening...",
       permission: telugu ? "మైక్రోఫోన్ అనుమతి ఇవ్వండి." : "Microphone permission is blocked. Allow it in browser settings.",
       unsupported: telugu ? "ఈ బ్రౌజర్‌లో మాట గుర్తింపు అందుబాటులో లేదు." : "Speech recognition is not supported in this browser.",
@@ -88,6 +89,34 @@
     return languageVoices.find(matchesGender) || voices.find(matchesGender) || null;
   }
 
+  function rememberSpokenReply(replyNonce) {
+    try { window.sessionStorage.setItem(replyNonceStorageKey, replyNonce); } catch (error) {}
+  }
+
+  function unlockAudioPlayback() {
+    replyAudioPlayer.src = silentAudioSource;
+    const playback = replyAudioPlayer.play();
+    if (playback && typeof playback.then === "function") {
+      playback.then(() => {
+        replyAudioPlayer.pause();
+        replyAudioPlayer.currentTime = 0;
+      }).catch(() => {});
+    }
+    if ("speechSynthesis" in window) window.speechSynthesis.resume();
+  }
+
+  function playReplyAudio(replyNonce) {
+    if (!args.reply_audio) return Promise.resolve(false);
+    replyAudioPlayer.pause();
+    replyAudioPlayer.src = args.reply_audio;
+    replyAudioPlayer.currentTime = 0;
+    return replyAudioPlayer.play().then(() => {
+      rememberSpokenReply(replyNonce);
+      status.textContent = labels().speaking;
+      return true;
+    }).catch(() => false);
+  }
+
   function speakReply() {
     const replyNonce = String(args.reply_nonce || "");
     if (!args.reply_text || !replyNonce || replyNonce === currentReplyNonce) return;
@@ -95,23 +124,23 @@
       if (window.sessionStorage.getItem(replyNonceStorageKey) === replyNonce) return;
     } catch (error) {}
     currentReplyNonce = replyNonce;
-    replayButton.dataset.visible = args.reply_audio ? "true" : "false";
-    replayButton.textContent = `🔊 ${labels().replay}`;
-    const playReplyAudio = () => {
-      if (!args.reply_audio) return false;
-      const audio = new Audio(args.reply_audio);
-      audio.play().then(() => {
-        status.textContent = labels().speaking;
-      }).catch(() => {
-        status.textContent = labels().replay;
+    let fallbackStarted = false;
+    let speechStarted = false;
+    const useAudioFallback = () => {
+      if (fallbackStarted) return;
+      fallbackStarted = true;
+      if (pendingSpeechTimer !== null) {
+        window.clearTimeout(pendingSpeechTimer);
+        pendingSpeechTimer = null;
+      }
+      if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+      playReplyAudio(replyNonce).then((played) => {
+        if (!played && currentReplyNonce === replyNonce) {
+          status.textContent = labels().audioUnavailable;
+        }
       });
-      return true;
     };
-    if (String(args.lang_code || "").toLowerCase().startsWith("te") && playReplyAudio()) {
-      try { window.sessionStorage.setItem(replyNonceStorageKey, replyNonce); } catch (error) {}
-      return;
-    }
-    if ("speechSynthesis" in window) {
+    if ("speechSynthesis" in window && "SpeechSynthesisUtterance" in window) {
       const plainText = normalizeSpeechText(args.reply_text);
       const utterance = new SpeechSynthesisUtterance(plainText);
       utterance.lang = args.lang_code || "en-IN";
@@ -126,7 +155,7 @@
         const voices = window.speechSynthesis.getVoices();
         const selectedVoice = selectVoiceForGender(voices, utterance.lang, args.voice_gender);
 
-        if ((!voices.length || (languagePrefix === "te" && !selectedVoice)) && attempts < 8) {
+        if ((!voices.length || (languagePrefix === "te" && !selectedVoice)) && attempts < 30) {
           attempts += 1;
           pendingSpeechTimer = window.setTimeout(speakWhenVoicesLoad, 150);
           return;
@@ -134,30 +163,42 @@
 
         started = true;
         pendingSpeechTimer = null;
-        if (!selectedVoice) {
-          playReplyAudio();
+        if (!selectedVoice && languagePrefix === "te") {
+          useAudioFallback();
           return;
         }
         if (selectedVoice) utterance.voice = selectedVoice;
-        try { window.sessionStorage.setItem(replyNonceStorageKey, replyNonce); } catch (error) {}
+        utterance.onstart = () => {
+          speechStarted = true;
+          if (pendingSpeechTimer !== null) {
+            window.clearTimeout(pendingSpeechTimer);
+            pendingSpeechTimer = null;
+          }
+          rememberSpokenReply(replyNonce);
+          status.textContent = labels().speaking;
+        };
+        utterance.onerror = useAudioFallback;
         window.speechSynthesis.cancel();
-        window.speechSynthesis.speak(utterance);
+        try {
+          window.speechSynthesis.resume();
+          window.speechSynthesis.speak(utterance);
+          pendingSpeechTimer = window.setTimeout(() => {
+            if (!speechStarted) useAudioFallback();
+          }, 3000);
+        } catch (error) {
+          useAudioFallback();
+        }
       };
       speakWhenVoicesLoad();
       return;
     }
-    if (args.reply_audio) {
-      try { window.sessionStorage.setItem(replyNonceStorageKey, replyNonce); } catch (error) {}
-      const audio = new Audio(args.reply_audio);
-      audio.play().catch(() => {});
-    }
+    useAudioFallback();
   }
 
   function render(event) {
     args = event.data.args || {};
     const copy = labels();
     button.setAttribute("aria-label", copy.tap);
-    replayButton.textContent = `🔊 ${copy.replay}`;
     caption.textContent = args.user_text ? `${copy.you}: ${args.user_text}` : "";
     if (!recognition && Recognition) {
       recognition = new Recognition();
@@ -222,6 +263,7 @@
       };
       button.addEventListener("click", () => {
         if (!recognition) return;
+        unlockAudioPlayback();
         if (pendingSpeechTimer !== null) {
           window.clearTimeout(pendingSpeechTimer);
           pendingSpeechTimer = null;
@@ -264,16 +306,6 @@
     speakReply();
     setFrameHeight();
   }
-
-  replayButton.addEventListener("click", () => {
-    if (!args.reply_audio) return;
-    const audio = new Audio(args.reply_audio);
-    audio.play().then(() => {
-      status.textContent = labels().speaking;
-    }).catch(() => {
-      status.textContent = labels().replay;
-    });
-  });
 
   window.addEventListener("message", (event) => {
     if (event.data && event.data.type === "streamlit:render") render(event);

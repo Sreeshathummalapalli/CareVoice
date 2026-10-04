@@ -13,8 +13,6 @@
       font-size: 36px; cursor: pointer; box-shadow: 0 5px 16px #16653438;
     }
     .mic[aria-pressed="true"] { background: #dc2626; box-shadow: 0 0 0 9px #dc26262b; }
-    .replay { display: none; margin: 10px auto 0; padding: 8px 14px; border: 1px solid #166534; border-radius: 8px; color: #166534; background: white; font-weight: 700; cursor: pointer; }
-    .replay[data-visible="true"] { display: block; }
     .status { margin-top: 10px; color: #166534; font-size: 14px; font-weight: 700; }
     .caption { min-height: 22px; max-width: 560px; margin: 8px auto 0; color: #334155; font-size: 15px; }
   </style>
@@ -22,7 +20,6 @@
 <body>
   <main class="voice">
     <button class="mic" id="mic" type="button" aria-label="Tap to speak" aria-pressed="false">🎙️</button>
-    <button class="replay" id="replay" type="button" data-visible="false">🔊 Play reply</button>
     <div class="status" id="status" aria-live="polite">Tap to Speak</div>
     <div class="caption" id="caption" aria-live="polite"></div>
   </main>

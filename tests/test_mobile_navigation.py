@@ -14,6 +14,7 @@ def test_mobile_navigation_uses_streamlit_buttons_without_full_page_links(monkey
     session_state = SimpleNamespace(mobile_nav_open=True, current_page="Home")
     button_calls = []
     rendered_markup = []
+    rerun_calls = []
 
     def fake_button(label, key, **kwargs):
         button_calls.append((label, key))
@@ -24,12 +25,13 @@ def test_mobile_navigation_uses_streamlit_buttons_without_full_page_links(monkey
     monkeypatch.setattr(navigation.st, "container", lambda **kwargs: nullcontext())
     monkeypatch.setattr(navigation.st, "columns", lambda *args, **kwargs: [nullcontext(), nullcontext()])
     monkeypatch.setattr(navigation.st, "button", fake_button)
-    monkeypatch.setattr(navigation.st, "rerun", lambda: None)
+    monkeypatch.setattr(navigation.st, "rerun", lambda: rerun_calls.append(True))
 
     navigation.render_mobile_drawer("CareVoice User", "Home", False)
 
     assert session_state.current_page == "Medicines"
     assert session_state.mobile_nav_open is False
+    assert rerun_calls == []
     assert "nav_to=" not in "".join(rendered_markup)
     assert {key for _, key in button_calls if key.startswith("carevoice_mobile_nav_")} == {
         f'carevoice_mobile_nav_{item["page"].lower().replace(" ", "_")}'

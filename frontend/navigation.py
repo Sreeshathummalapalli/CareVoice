@@ -97,14 +97,13 @@ def _session_set(key: str, value) -> None:
 def navigate_to_page(page_name: str) -> None:
     """
     Helper function for programmatic navigation.
-    Updates session state and triggers page rerun.
+    Updates session state during Streamlit's normal widget rerun.
     
     Args:
         page_name: The name of the page to navigate to (e.g., "Home", "Medicines")
     """
     if page_name in [item["page"] for item in NAV_ITEMS]:
         _session_set("current_page", page_name)
-        st.rerun()
     else:
         st.error(f"Invalid page: {page_name}")
 
@@ -124,7 +123,6 @@ def _sign_out_from_mobile_menu() -> None:
         "action": "clear",
         "nonce": secrets.token_urlsafe(12),
     })
-    st.rerun()
 
 
 def render_mobile_drawer(user_name: str, current_page: str, is_te: bool) -> None:
@@ -189,7 +187,6 @@ def render_mobile_drawer(user_name: str, current_page: str, is_te: bool) -> None
                 "మెను మూసివేయండి" if is_te else "Close menu"
             )):
                 _close_mobile_menu()
-                st.rerun()
 
         for item in NAV_ITEMS:
             active = item["page"] == current_page
