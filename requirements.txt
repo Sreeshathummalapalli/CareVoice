@@ -1,0 +1,11 @@
+groq
+pypdf
+PyMuPDF
+rapidocr-onnxruntime
+SpeechRecognition
+pyttsx3
+python-dotenv
+pyaudio
+streamlit
+gTTS
+pywebpush

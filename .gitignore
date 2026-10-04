@@ -1,0 +1,17 @@
+.env
+.env.*
+!.env.example
+.venv/
+__pycache__/
+*.py[cod]
+carevoice.db
+carevoice.db-wal
+carevoice.db-shm
+*.sqlite
+*.sqlite3
+uploads/
+reminder_action_secret
+vapid_private.pem
+*.pem
+*.key
+.pytest_cache/
