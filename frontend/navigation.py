@@ -4,7 +4,6 @@
 import streamlit as st
 from html import escape
 import secrets
-from urllib.parse import quote
 
 from db import carevoice_db as db
 
@@ -12,56 +11,87 @@ from db import carevoice_db as db
 # Navigation Items Configuration
 NAV_ITEMS = [
     {
-        "label": "Home",
+        "label": "My Home",
         "icon": "🏠",
         "description": "Dashboard",
         "page": "Home",
         "primary": True
     },
     {
-        "label": "Medicines",
+        "label": "My Medicines",
         "icon": "💊",
         "description": "Schedule & Prescriptions",
         "page": "Medicines",
         "primary": True
     },
     {
-        "label": "Prescriptions",
+        "label": "My Prescriptions",
         "icon": "📋",
         "description": "3-Step Upload Workflow",
         "page": "Prescriptions",
         "primary": True
     },
     {
-        "label": "Health",
+        "label": "My Health",
         "icon": "🩺",
         "description": "Health Metrics & Charts",
         "page": "Health",
         "primary": True
     },
     {
-        "label": "Voice Assistant",
+        "label": "My Voice Assistant",
         "icon": "🎙️",
         "description": "CareVoice Siri Hub",
         "page": "Voice Assistant",
         "primary": True,
-        "mobile_label": "Voice"
     },
     {
-        "label": "Diet",
+        "label": "My Diet",
         "icon": "🥗",
         "description": "Daily Nutrition Guidance",
         "page": "Diet",
         "primary": True
     },
     {
-        "label": "Settings",
+        "label": "My Settings",
         "icon": "⚙️",
         "description": "Preferences & Language",
         "page": "Settings",
         "primary": False
     }
 ]
+
+
+TELUGU_NAV_LABELS = {
+    "Home": "నా హోమ్",
+    "Medicines": "నా మందులు",
+    "Prescriptions": "నా ప్రిస్క్రిప్షన్లు",
+    "Health": "నా ఆరోగ్యం",
+    "Voice Assistant": "నా వాయిస్ సహాయకుడు",
+    "Diet": "నా ఆహారం",
+    "Settings": "నా సెట్టింగ్‌లు",
+}
+
+
+def navigation_label(item: dict, is_te: bool = False) -> str:
+    if is_te:
+        return TELUGU_NAV_LABELS[item["page"]]
+    return item["label"]
+
+
+def _session_get(key: str, default=None):
+    state = st.session_state
+    if hasattr(state, "get"):
+        return state.get(key, default)
+    return getattr(state, key, default)
+
+
+def _session_set(key: str, value) -> None:
+    state = st.session_state
+    if hasattr(state, "__setitem__"):
+        state[key] = value
+    else:
+        setattr(state, key, value)
 
 
 def navigate_to_page(page_name: str) -> None:
@@ -73,95 +103,112 @@ def navigate_to_page(page_name: str) -> None:
         page_name: The name of the page to navigate to (e.g., "Home", "Medicines")
     """
     if page_name in [item["page"] for item in NAV_ITEMS]:
-        st.session_state.current_page = page_name
+        _session_set("current_page", page_name)
         st.rerun()
     else:
         st.error(f"Invalid page: {page_name}")
 
 
-def build_mobile_drawer_html(user_name: str, current_page: str, is_te: bool) -> str:
-    labels_te = {
-        "Home": "హోమ్",
-        "Medicines": "మందులు",
-        "Prescriptions": "ప్రిస్క్రిప్షన్లు",
-        "Health": "ఆరోగ్యం",
-        "Voice Assistant": "వాయిస్ సహాయకుడు",
-        "Diet": "ఆహారం",
-        "Settings": "సెట్టింగ్‌లు",
-    }
-    user_label = escape(str(user_name))
-    rows = []
-    for item in NAV_ITEMS:
-        page = item["page"]
-        label = labels_te[page] if is_te else item["label"]
-        active_class = " active" if page == current_page else ""
-        rows.append(
-            f'<a class="carevoice-mobile-link{active_class}" href="?nav_to={quote(page)}">'
-            f'<span aria-hidden="true">{item["icon"]}</span><span>{escape(label)}</span></a>'
-        )
+def _close_mobile_menu() -> None:
+    _session_set("mobile_nav_open", False)
 
-    sign_out = "లాగ్ అవుట్" if is_te else "Sign Out"
-    menu_label = "నావిగేషన్ మెను" if is_te else "Navigation menu"
-    close_label = "మెను మూసివేయండి" if is_te else "Close menu"
-    close_url = f"?nav_to={quote(current_page)}"
-    return f"""
-    <style>
-    .carevoice-mobile-drawer {{ display:none; }}
-    @media (max-width: 767px) {{
-      section[data-testid="stSidebar"] {{ display:none !important; }}
-      .main .block-container {{ padding-top:4.25rem !important; }}
-      .carevoice-mobile-drawer {{ display:block; position:fixed; top:12px; left:12px; z-index:10001; }}
-      .carevoice-mobile-drawer > summary {{
-        width:46px; height:46px; display:grid; place-items:center; list-style:none;
-        border:1px solid #dbe5df; border-radius:12px; background:#fff; color:#166534;
-        box-shadow:0 3px 12px #0f172a18; font-size:25px; cursor:pointer;
-      }}
-      .carevoice-mobile-drawer > summary::-webkit-details-marker {{ display:none; }}
-      .carevoice-mobile-drawer[open]::before {{
-        content:""; position:fixed; inset:0; z-index:-1; background:#0f172a66;
-      }}
-      .carevoice-mobile-panel {{
-        position:fixed; inset:0 auto 0 0; z-index:10000; box-sizing:border-box;
-        width:min( min(340px, 88vw), 100% ); overflow-y:auto; padding:20px 16px;
-        background:#fff; box-shadow:8px 0 28px #0f172a24;
-      }}
-      .carevoice-mobile-head {{ display:flex; align-items:center; justify-content:space-between;
-        padding:4px 4px 16px; margin-bottom:12px; border-bottom:1px solid #e2e8f0; }}
-      .carevoice-mobile-brand {{ color:#166534; font-size:19px; font-weight:750; }}
-      .carevoice-mobile-user {{ margin-top:3px; color:#64748b; font-size:13px; }}
-      .carevoice-mobile-close {{ display:grid; place-items:center; border:0; border-radius:8px;
-        background:#f1f5f9; color:#334155; padding:8px 11px; font-size:18px;
-        text-decoration:none; cursor:pointer; }}
-      .carevoice-mobile-link {{ display:flex; align-items:center; gap:12px;
-        min-height:48px; margin:4px 0; padding:0 12px; border-radius:10px;
-        color:#334155; font-size:15px; font-weight:600; text-decoration:none; }}
-      .carevoice-mobile-link.active {{ background:#eaf5ee; color:#166534; }}
-      .carevoice-mobile-link:focus-visible,.carevoice-mobile-close:focus-visible {{
-        outline:3px solid #4ade80; outline-offset:2px; }}
-      .carevoice-mobile-signout {{ display:block; margin-top:16px; padding:14px 12px;
-        border-top:1px solid #e2e8f0; color:#991b1b; font-weight:650; text-decoration:none; }}
-    }}
-    </style>
-    <details class="carevoice-mobile-drawer">
-      <summary aria-label="{menu_label}" title="{menu_label}">☰</summary>
-      <nav class="carevoice-mobile-panel" aria-label="{menu_label}">
-        <div class="carevoice-mobile-head">
-          <div><div class="carevoice-mobile-brand">🌿 CareVoice</div>
-            <div class="carevoice-mobile-user">{user_label}</div></div>
-          <a class="carevoice-mobile-close" aria-label="{close_label}" href="{close_url}">×</a>
-        </div>
-        {''.join(rows)}
-        <a class="carevoice-mobile-signout" href="?logout=1">🚪 {sign_out}</a>
-      </nav>
-    </details>
-    """
+
+def _sign_out_from_mobile_menu() -> None:
+    db.revoke_auth_session(_session_get("auth_session_token", ""))
+    _session_set("auth_session_token", "")
+    _session_set("user", None)
+    _session_set("view", "landing")
+    _session_set("current_page", "Home")
+    _session_set("mobile_nav_open", False)
+    _session_set("pending_auth_cookie", {
+        "action": "clear",
+        "nonce": secrets.token_urlsafe(12),
+    })
+    st.rerun()
 
 
 def render_mobile_drawer(user_name: str, current_page: str, is_te: bool) -> None:
-    st.markdown(
-        build_mobile_drawer_html(user_name, current_page, is_te),
-        unsafe_allow_html=True,
-    )
+    state = st.session_state
+    if hasattr(state, "__contains__"):
+        if "mobile_nav_open" not in state:
+            _session_set("mobile_nav_open", False)
+    elif not hasattr(state, "mobile_nav_open"):
+        _session_set("mobile_nav_open", False)
+
+    st.markdown("""
+    <style>
+    @media (max-width: 767px) {
+      section[data-testid="stSidebar"] { display:none !important; }
+      .main .block-container { padding-top:4.25rem !important; }
+      div.st-key-carevoice_mobile_menu_toggle {
+        position:fixed; top:12px; left:12px; z-index:10002; width:46px;
+      }
+      div.st-key-carevoice_mobile_menu_toggle button {
+        width:46px; height:46px; padding:0; border:1px solid #dbe5df;
+        border-radius:12px; background:#fff; color:#166534; font-size:25px;
+        box-shadow:0 3px 12px #0f172a18;
+      }
+      div.st-key-carevoice_mobile_panel {
+        position:fixed; inset:0 auto 0 0; z-index:10001; box-sizing:border-box;
+        width:min(340px, 88vw); height:100dvh; overflow-y:auto; padding:20px 16px;
+        background:#fff; box-shadow:0 0 0 100vmax #0f172a66, 8px 0 28px #0f172a24;
+      }
+      div.st-key-carevoice_mobile_panel button {
+        min-height:48px; text-align:left; text-decoration:none !important;
+        border-bottom:0 !important;
+      }
+      div.st-key-carevoice_mobile_panel .stMarkdown h2,
+      div.st-key-carevoice_mobile_panel .stMarkdown p {
+        text-decoration:none !important; border-bottom:0 !important;
+      }
+    }
+    @media (min-width: 768px) {
+      div.st-key-carevoice_mobile_menu_toggle,
+      div.st-key-carevoice_mobile_panel { display:none !important; }
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+    menu_label = "నావిగేషన్ మెను" if is_te else "Navigation menu"
+    if st.button("☰", key="carevoice_mobile_menu_toggle", help=menu_label):
+        _session_set("mobile_nav_open", not _session_get("mobile_nav_open", False))
+
+    if not _session_get("mobile_nav_open", False):
+        return
+
+    with st.container(key="carevoice_mobile_panel"):
+        header_col, close_col = st.columns([5, 1])
+        with header_col:
+            st.markdown(
+                f"<h2 style='margin:0; color:#166534;'>🌿 CareVoice</h2>"
+                f"<p style='margin:2px 0 12px; color:#64748b;'>{escape(str(user_name))}</p>",
+                unsafe_allow_html=True,
+            )
+        with close_col:
+            if st.button("×", key="carevoice_mobile_menu_close", help=(
+                "మెను మూసివేయండి" if is_te else "Close menu"
+            )):
+                _close_mobile_menu()
+                st.rerun()
+
+        for item in NAV_ITEMS:
+            active = item["page"] == current_page
+            if st.button(
+                f'{item["icon"]}  {navigation_label(item, is_te)}',
+                key=f'carevoice_mobile_nav_{item["page"].lower().replace(" ", "_")}',
+                type="primary" if active else "secondary",
+                use_container_width=True,
+            ):
+                _session_set("mobile_nav_open", False)
+                navigate_to_page(item["page"])
+
+        if st.button(
+            "🚪 లాగ్ అవుట్" if is_te else "🚪 Sign Out",
+            key="carevoice_mobile_sign_out",
+            use_container_width=True,
+            type="secondary",
+        ):
+            _sign_out_from_mobile_menu()
 
 
 def render_sidebar_navigation() -> None:
@@ -180,13 +227,13 @@ def render_sidebar_navigation() -> None:
     current_page = st.session_state.get("current_page", "Home")
     is_te = st.session_state.get("lang_code", "en-IN") == "te-IN"
     page_labels_te = {
-        "Home": ("హోమ్", "డాష్‌బోర్డ్"),
-        "Medicines": ("మందులు", "మందుల షెడ్యూల్ మరియు వివరాలు"),
-        "Prescriptions": ("ప్రిస్క్రిప్షన్లు", "ప్రిస్క్రిప్షన్ అప్‌లోడ్"),
-        "Health": ("ఆరోగ్యం", "ఆరోగ్య కొలతలు మరియు చార్ట్‌లు"),
-        "Voice Assistant": ("వాయిస్ సహాయకుడు", "కేర్‌వాయిస్"),
-        "Diet": ("ఆహారం", "రోజువారీ పోషకాహార సూచనలు"),
-        "Settings": ("సెట్టింగ్‌లు", "ప్రాధాన్యతలు మరియు భాష"),
+        "Home": ("నా హోమ్", "డాష్‌బోర్డ్"),
+        "Medicines": ("నా మందులు", "మందుల షెడ్యూల్ మరియు వివరాలు"),
+        "Prescriptions": ("నా ప్రిస్క్రిప్షన్లు", "ప్రిస్క్రిప్షన్ అప్‌లోడ్"),
+        "Health": ("నా ఆరోగ్యం", "ఆరోగ్య కొలతలు మరియు చార్ట్‌లు"),
+        "Voice Assistant": ("నా వాయిస్ సహాయకుడు", "కేర్‌వాయిస్"),
+        "Diet": ("నా ఆహారం", "రోజువారీ పోషకాహార సూచనలు"),
+        "Settings": ("నా సెట్టింగ్‌లు", "ప్రాధాన్యతలు మరియు భాష"),
     }
     
     with st.sidebar:
@@ -287,11 +334,11 @@ def render_bottom_navigation() -> None:
     current_page = st.session_state.get("current_page", "Home")
     is_te = st.session_state.get("lang_code", "en-IN") == "te-IN"
     mobile_labels_te = {
-        "Home": "హోమ్",
-        "Medicines": "మందులు",
-        "Prescriptions": "ప్రిస్క్రిప్షన్",
-        "Health": "ఆరోగ్యం",
-        "Voice Assistant": "వాయిస్",
+        "Home": "నా హోమ్",
+        "Medicines": "నా మందులు",
+        "Prescriptions": "నా ప్రిస్క్రిప్షన్లు",
+        "Health": "నా ఆరోగ్యం",
+        "Voice Assistant": "నా వాయిస్",
     }
     
     # Get primary navigation items only (first 5)
@@ -371,7 +418,7 @@ def render_bottom_navigation() -> None:
     for item in primary_items:
         is_active = current_page == item["page"]
         active_class = "active" if is_active else ""
-        display_label = mobile_labels_te[item["page"]] if is_te else item.get("mobile_label", item["label"])
+        display_label = mobile_labels_te[item["page"]] if is_te else item["label"]
         
         nav_html += f"""
         <div class="bottom-nav-item {active_class}" onclick="navigateToPage('{item['page']}')" 

@@ -1,27 +1,49 @@
-from frontend.navigation import NAV_ITEMS, build_mobile_drawer_html
+from contextlib import nullcontext
+from types import SimpleNamespace
+
+from frontend import navigation
 
 
-def test_mobile_drawer_contains_every_navigation_page():
-    markup = build_mobile_drawer_html("CareVoice User", "Home", False)
-
-    for item in NAV_ITEMS:
-        assert f'nav_to={item["page"].replace(" ", "%20")}' in markup
-        assert item["label"] in markup
-    assert "Sign Out" in markup
-    assert "CareVoice User" in markup
+def test_navigation_labels_include_my_prefix_in_english_and_telugu():
+    for item in navigation.NAV_ITEMS:
+        assert navigation.navigation_label(item).startswith("My ")
+        assert navigation.navigation_label(item, is_te=True).startswith("నా ")
 
 
-def test_mobile_drawer_uses_telugu_labels_and_marks_active_page():
-    markup = build_mobile_drawer_html("వినియోగదారు", "Health", True)
+def test_mobile_navigation_uses_streamlit_buttons_without_full_page_links(monkeypatch):
+    session_state = SimpleNamespace(mobile_nav_open=True, current_page="Home")
+    button_calls = []
+    rendered_markup = []
 
-    assert "వాయిస్ సహాయకుడు" in markup
-    assert "సెట్టింగ్‌లు" in markup
-    assert 'class="carevoice-mobile-link active" href="?nav_to=Health"' in markup
-    assert "లాగ్ అవుట్" in markup
+    def fake_button(label, key, **kwargs):
+        button_calls.append((label, key))
+        return key == "carevoice_mobile_nav_medicines"
+
+    monkeypatch.setattr(navigation.st, "session_state", session_state)
+    monkeypatch.setattr(navigation.st, "markdown", lambda markup, **kwargs: rendered_markup.append(markup))
+    monkeypatch.setattr(navigation.st, "container", lambda **kwargs: nullcontext())
+    monkeypatch.setattr(navigation.st, "columns", lambda *args, **kwargs: [nullcontext(), nullcontext()])
+    monkeypatch.setattr(navigation.st, "button", fake_button)
+    monkeypatch.setattr(navigation.st, "rerun", lambda: None)
+
+    navigation.render_mobile_drawer("CareVoice User", "Home", False)
+
+    assert session_state.current_page == "Medicines"
+    assert session_state.mobile_nav_open is False
+    assert "nav_to=" not in "".join(rendered_markup)
+    assert {key for _, key in button_calls if key.startswith("carevoice_mobile_nav_")} == {
+        f'carevoice_mobile_nav_{item["page"].lower().replace(" ", "_")}'
+        for item in navigation.NAV_ITEMS
+    }
 
 
-def test_mobile_drawer_escapes_user_supplied_profile_name():
-    markup = build_mobile_drawer_html("<script>alert(1)</script>", "Home", False)
+def test_mobile_drawer_has_no_underlines_on_feature_buttons(monkeypatch):
+    rendered_markup = []
+    monkeypatch.setattr(navigation.st, "session_state", SimpleNamespace(mobile_nav_open=False))
+    monkeypatch.setattr(navigation.st, "markdown", lambda markup, **kwargs: rendered_markup.append(markup))
+    monkeypatch.setattr(navigation.st, "button", lambda *args, **kwargs: False)
 
-    assert "<script>alert(1)</script>" not in markup
-    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in markup
+    navigation.render_mobile_drawer("CareVoice User", "Home", False)
+
+    assert "text-decoration:none !important" in rendered_markup[0]
+    assert "border-bottom:0 !important" in rendered_markup[0]
