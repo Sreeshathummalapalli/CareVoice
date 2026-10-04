@@ -5,6 +5,7 @@ import os
 import time
 import hashlib
 import base64
+import secrets
 import tempfile
 import json
 import datetime
@@ -39,6 +40,10 @@ voice_mic_component = components.declare_component(
 push_setup_component = components.declare_component(
     "carevoice_push_setup",
     path=os.path.join(os.path.dirname(__file__), "frontend", "push_setup"),
+)
+auth_cookie_component = components.declare_component(
+    "carevoice_auth_cookie",
+    path=os.path.join(os.path.dirname(__file__), "frontend", "auth_cookie"),
 )
 
 st.set_page_config(
@@ -419,6 +424,86 @@ if "voice_gender" not in st.session_state:
 if "current_page" not in st.session_state:
     st.session_state.current_page = "Home"
 
+requested_page = st.query_params.get("nav_to")
+if requested_page in {item["page"] for item in nav.NAV_ITEMS}:
+    st.session_state.current_page = requested_page
+    del st.query_params["nav_to"]
+
+if "auth_session_token" not in st.session_state:
+    st.session_state.auth_session_token = ""
+if "pending_auth_cookie" not in st.session_state:
+    st.session_state.pending_auth_cookie = None
+
+logout_requested = st.query_params.get("logout") == "1"
+if logout_requested:
+    del st.query_params["logout"]
+    db.revoke_auth_session(st.session_state.auth_session_token)
+    st.session_state.auth_session_token = ""
+    st.session_state.user = None
+    st.session_state.view = "landing"
+    st.session_state.current_page = "Home"
+    st.session_state.pending_auth_cookie = {
+        "action": "clear",
+        "nonce": secrets.token_urlsafe(12),
+    }
+
+cookie_command = st.session_state.pending_auth_cookie
+auth_cookie_value = auth_cookie_component(
+    command=cookie_command or {},
+    key="carevoice_auth_cookie",
+    default=None,
+)
+browser_auth_token = (
+    auth_cookie_value.get("token", "")
+    if isinstance(auth_cookie_value, dict)
+    else ""
+)
+
+if cookie_command:
+    if (
+        cookie_command["action"] == "set"
+        and isinstance(auth_cookie_value, dict)
+        and auth_cookie_value.get("error")
+    ):
+        db.revoke_auth_session(cookie_command.get("token", ""))
+        st.session_state.auth_session_token = ""
+        st.session_state.user = None
+        st.session_state.view = "login"
+        st.session_state.pending_auth_cookie = {
+            "action": "clear",
+            "nonce": secrets.token_urlsafe(12),
+        }
+        st.session_state.auth_cookie_error = auth_cookie_value["error"]
+    elif cookie_command["action"] == "clear" and not browser_auth_token:
+        st.session_state.pending_auth_cookie = None
+    elif (
+        cookie_command["action"] == "set"
+        and browser_auth_token == cookie_command.get("token")
+    ):
+        st.session_state.pending_auth_cookie = None
+        st.session_state.auth_session_token = browser_auth_token
+elif (
+    not logout_requested
+    and not st.session_state.user
+    and browser_auth_token
+    and requested_view not in {"login", "signup"}
+):
+    restored_user = db.get_user_by_auth_session(browser_auth_token)
+    if restored_user:
+        st.session_state.user = restored_user
+        st.session_state.auth_session_token = browser_auth_token
+        st.session_state.voice_gender = restored_user.get("voice_gender", "Female Voice")
+        st.session_state.lang_code = restored_user.get("language", "en-IN")
+        st.session_state.elderly_mode = bool(restored_user.get("elderly_mode", 0))
+        st.session_state.view = (
+            "app" if restored_user.get("onboarding_completed", 0) else "onboarding"
+        )
+    else:
+        st.session_state.pending_auth_cookie = {
+            "action": "clear",
+            "nonce": secrets.token_urlsafe(12),
+        }
+
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
@@ -527,6 +612,12 @@ def apply_custom_css():
             display: none !important;
             height: 0px !important;
             min-height: 0px !important;
+        }}
+
+        @media (max-width: 767px) {{
+            section[data-testid="stSidebar"] {{
+                display: none !important;
+            }}
         }}
 
         .block-container,
@@ -1348,8 +1439,11 @@ def render_push_subscription_control(user_id):
 
 @st.dialog("Medicine Reminder / మందుల జ్ఞాపిక", dismissible=False, width="large")
 def show_medicine_reminder_popup(rem):
-    user_id = st.session_state.user["id"] if st.session_state.user else 1
-    user_name = st.session_state.user["name"] if st.session_state.user else "User"
+    user = st.session_state.get("user")
+    if not user:
+        return
+    user_id = user["id"]
+    user_name = user["name"]
     is_te = st.session_state.lang_code.lower().startswith("te")
     m_id = rem["id"]
     m_name = rem["name"]
@@ -1794,10 +1888,39 @@ def _localized_auth_message(message, is_te):
     return translations.get(message, message)
 
 
+def start_authenticated_session(user, view):
+    token = db.create_auth_session(user["id"])
+    st.session_state.user = user
+    st.session_state.auth_session_token = token
+    st.session_state.pending_auth_cookie = {
+        "action": "set",
+        "token": token,
+        "nonce": secrets.token_urlsafe(12),
+    }
+    st.session_state.voice_gender = user.get("voice_gender", "Female Voice")
+    st.session_state.lang_code = user.get("language", st.session_state.lang_code)
+    st.session_state.elderly_mode = bool(user.get("elderly_mode", 0))
+    st.session_state.view = view
+
+
+def clear_authenticated_session():
+    db.revoke_auth_session(st.session_state.get("auth_session_token", ""))
+    st.session_state.auth_session_token = ""
+    st.session_state.user = None
+    st.session_state.view = "landing"
+    st.session_state.current_page = "Home"
+    st.session_state.pending_auth_cookie = {
+        "action": "clear",
+        "nonce": secrets.token_urlsafe(12),
+    }
+
+
 # -----------------------------------------------------------------------------
 # 2. LOGIN & PASSWORD RESET VIEW
 # -----------------------------------------------------------------------------
 def render_login_page():
+    if st.session_state.get("auth_cookie_error"):
+        st.error(st.session_state.pop("auth_cookie_error"))
     if "public_language" not in st.session_state:
         st.session_state.public_language = "తెలుగు" if str(st.session_state.lang_code).startswith("te") else "English"
     public_language = st.radio(
@@ -1834,11 +1957,10 @@ def render_login_page():
                 if err:
                     st.error(_localized_auth_message(err, is_te))
                 else:
-                    st.session_state.user = user
-                    st.session_state.voice_gender = user.get("voice_gender", "Female Voice")
-                    st.session_state.lang_code = user.get("language", "en-IN")
-                    st.session_state.elderly_mode = bool(user.get("elderly_mode", 0))
-                    st.session_state.view = "app" if user.get("onboarding_completed", 0) else "onboarding"
+                    start_authenticated_session(
+                        user,
+                        "app" if user.get("onboarding_completed", 0) else "onboarding",
+                    )
                     st.success("విజయవంతంగా సైన్ ఇన్ అయ్యారు!" if is_te else "Successfully signed in!")
                     st.rerun()
 
@@ -1870,7 +1992,7 @@ def render_reset_password_page():
             </div>
         """, unsafe_allow_html=True)
 
-        r_email = st.text_input("ఖాతా ఇమెయిల్ చిరునామా" if is_te else "Account Email Address", placeholder="demo@carevoice.health")
+        r_email = st.text_input("ఖాతా ఇమెయిల్ చిరునామా" if is_te else "Account Email Address", placeholder="name@example.com")
         r_ans = st.text_input("భద్రతా సమాధానం ('మీ ప్రధాన ఆరోగ్య లక్ష్యం ఏమిటి?')" if is_te else "Security Answer ('What is your primary health focus?')", value="wellness")
         r_new_pw = st.text_input("కొత్త పాస్‌వర్డ్" if is_te else "New Password", type="password", placeholder="••••••••")
 
@@ -2015,10 +2137,7 @@ def render_signup_page():
                 if err:
                     st.error(_localized_auth_message(err, is_te))
                 else:
-                    st.session_state.user = user
-                    st.session_state.voice_gender = user.get("voice_gender", "Female Voice")
-                    st.session_state.lang_code = lang_code
-                    st.session_state.view = "onboarding"
+                    start_authenticated_session(user, "onboarding")
                     st.success("ఖాతా విజయవంతంగా సృష్టించబడింది!" if is_te else "Account created successfully!")
                     st.rerun()
 
@@ -2318,6 +2437,11 @@ def render_authenticated_app():
         st.session_state.get("voice_gender", "Female Voice"),
     )
     render_active_medicine_reminder_banner()
+    nav.render_mobile_drawer(
+        user_name,
+        st.session_state.current_page,
+        is_te,
+    )
 
     # SIDEBAR NAVIGATION
     with st.sidebar:
@@ -2377,9 +2501,7 @@ def render_authenticated_app():
         st.markdown("---")
         signout_label = "🚪 లాగ్ అవుట్" if is_te else "🚪 Sign Out"
         if st.button(signout_label, use_container_width=True, type="secondary", key="sb_signout"):
-            st.session_state.user = None
-            st.session_state.view = "landing"
-            st.session_state.current_page = "Home"
+            clear_authenticated_session()
             st.rerun()
 
     if st.session_state.current_page == "Home":

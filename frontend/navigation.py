@@ -2,6 +2,11 @@
 # Provides responsive navigation with mobile bottom bar and desktop sidebar
 
 import streamlit as st
+from html import escape
+import secrets
+from urllib.parse import quote
+
+from db import carevoice_db as db
 
 
 # Navigation Items Configuration
@@ -72,6 +77,91 @@ def navigate_to_page(page_name: str) -> None:
         st.rerun()
     else:
         st.error(f"Invalid page: {page_name}")
+
+
+def build_mobile_drawer_html(user_name: str, current_page: str, is_te: bool) -> str:
+    labels_te = {
+        "Home": "హోమ్",
+        "Medicines": "మందులు",
+        "Prescriptions": "ప్రిస్క్రిప్షన్లు",
+        "Health": "ఆరోగ్యం",
+        "Voice Assistant": "వాయిస్ సహాయకుడు",
+        "Diet": "ఆహారం",
+        "Settings": "సెట్టింగ్‌లు",
+    }
+    user_label = escape(str(user_name))
+    rows = []
+    for item in NAV_ITEMS:
+        page = item["page"]
+        label = labels_te[page] if is_te else item["label"]
+        active_class = " active" if page == current_page else ""
+        rows.append(
+            f'<a class="carevoice-mobile-link{active_class}" href="?nav_to={quote(page)}">'
+            f'<span aria-hidden="true">{item["icon"]}</span><span>{escape(label)}</span></a>'
+        )
+
+    sign_out = "లాగ్ అవుట్" if is_te else "Sign Out"
+    menu_label = "నావిగేషన్ మెను" if is_te else "Navigation menu"
+    close_label = "మెను మూసివేయండి" if is_te else "Close menu"
+    close_url = f"?nav_to={quote(current_page)}"
+    return f"""
+    <style>
+    .carevoice-mobile-drawer {{ display:none; }}
+    @media (max-width: 767px) {{
+      section[data-testid="stSidebar"] {{ display:none !important; }}
+      .main .block-container {{ padding-top:4.25rem !important; }}
+      .carevoice-mobile-drawer {{ display:block; position:fixed; top:12px; left:12px; z-index:10001; }}
+      .carevoice-mobile-drawer > summary {{
+        width:46px; height:46px; display:grid; place-items:center; list-style:none;
+        border:1px solid #dbe5df; border-radius:12px; background:#fff; color:#166534;
+        box-shadow:0 3px 12px #0f172a18; font-size:25px; cursor:pointer;
+      }}
+      .carevoice-mobile-drawer > summary::-webkit-details-marker {{ display:none; }}
+      .carevoice-mobile-drawer[open]::before {{
+        content:""; position:fixed; inset:0; z-index:-1; background:#0f172a66;
+      }}
+      .carevoice-mobile-panel {{
+        position:fixed; inset:0 auto 0 0; z-index:10000; box-sizing:border-box;
+        width:min( min(340px, 88vw), 100% ); overflow-y:auto; padding:20px 16px;
+        background:#fff; box-shadow:8px 0 28px #0f172a24;
+      }}
+      .carevoice-mobile-head {{ display:flex; align-items:center; justify-content:space-between;
+        padding:4px 4px 16px; margin-bottom:12px; border-bottom:1px solid #e2e8f0; }}
+      .carevoice-mobile-brand {{ color:#166534; font-size:19px; font-weight:750; }}
+      .carevoice-mobile-user {{ margin-top:3px; color:#64748b; font-size:13px; }}
+      .carevoice-mobile-close {{ display:grid; place-items:center; border:0; border-radius:8px;
+        background:#f1f5f9; color:#334155; padding:8px 11px; font-size:18px;
+        text-decoration:none; cursor:pointer; }}
+      .carevoice-mobile-link {{ display:flex; align-items:center; gap:12px;
+        min-height:48px; margin:4px 0; padding:0 12px; border-radius:10px;
+        color:#334155; font-size:15px; font-weight:600; text-decoration:none; }}
+      .carevoice-mobile-link.active {{ background:#eaf5ee; color:#166534; }}
+      .carevoice-mobile-link:focus-visible,.carevoice-mobile-close:focus-visible {{
+        outline:3px solid #4ade80; outline-offset:2px; }}
+      .carevoice-mobile-signout {{ display:block; margin-top:16px; padding:14px 12px;
+        border-top:1px solid #e2e8f0; color:#991b1b; font-weight:650; text-decoration:none; }}
+    }}
+    </style>
+    <details class="carevoice-mobile-drawer">
+      <summary aria-label="{menu_label}" title="{menu_label}">☰</summary>
+      <nav class="carevoice-mobile-panel" aria-label="{menu_label}">
+        <div class="carevoice-mobile-head">
+          <div><div class="carevoice-mobile-brand">🌿 CareVoice</div>
+            <div class="carevoice-mobile-user">{user_label}</div></div>
+          <a class="carevoice-mobile-close" aria-label="{close_label}" href="{close_url}">×</a>
+        </div>
+        {''.join(rows)}
+        <a class="carevoice-mobile-signout" href="?logout=1">🚪 {sign_out}</a>
+      </nav>
+    </details>
+    """
+
+
+def render_mobile_drawer(user_name: str, current_page: str, is_te: bool) -> None:
+    st.markdown(
+        build_mobile_drawer_html(user_name, current_page, is_te),
+        unsafe_allow_html=True,
+    )
 
 
 def render_sidebar_navigation() -> None:
@@ -173,9 +263,15 @@ def render_sidebar_navigation() -> None:
         
         # Sign Out Button
         if st.button("🚪 సైన్ అవుట్" if is_te else "🚪 Sign Out", use_container_width=True, type="secondary", key="sidebar_signout"):
+            db.revoke_auth_session(st.session_state.get("auth_session_token", ""))
+            st.session_state.auth_session_token = ""
             st.session_state.user = None
             st.session_state.view = "landing"
             st.session_state.current_page = "Home"
+            st.session_state.pending_auth_cookie = {
+                "action": "clear",
+                "nonce": secrets.token_urlsafe(12),
+            }
             st.rerun()
 
 

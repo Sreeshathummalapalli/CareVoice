@@ -5,12 +5,14 @@ import hmac
 import json
 import secrets
 from datetime import datetime, timedelta
+from datetime import timezone
 from backend.storage import DATA_DIR
 
 DB_NAME = str(DATA_DIR / "carevoice.db")
 _PASSWORD_HASH_SCHEME = "pbkdf2_sha256"
 _PASSWORD_HASH_ITERATIONS = 600_000
 _LEGACY_PASSWORD_SALT = "carevoice_secure_salt_2026"
+_AUTH_SESSION_LIFETIME_DAYS = 30
 
 def get_db_connection():
     os.makedirs(os.path.dirname(os.path.abspath(DB_NAME)), exist_ok=True)
@@ -293,122 +295,18 @@ def init_db():
         )
     ''')
 
-    conn.commit()
-
-    # Check if seed demo user exists
-    cursor.execute("SELECT COUNT(*) FROM users")
-    user_count = cursor.fetchone()[0]
-
-    if user_count == 0:
-        seed_data(cursor)
-        conn.commit()
-
-    conn.close()
-
-def seed_data(cursor):
-    # Create Demo User
-    demo_password = os.getenv("CAREVOICE_DEMO_PASSWORD") or secrets.token_urlsafe(32)
-    demo_security_answer = os.getenv("CAREVOICE_DEMO_SECURITY_ANSWER") or secrets.token_urlsafe(32)
-    demo_pw = hash_password(demo_password)
-    demo_ans = hash_password(demo_security_answer.strip().lower())
     cursor.execute('''
-        INSERT INTO users (name, email, password_hash, reset_question, reset_answer_hash, phone, language, elderly_mode, onboarding_completed)
-        VALUES ('Ramesh Kumar', 'demo@carevoice.health', ?, 'What is your primary health focus?', ?, '+91 98765 43210', 'en-IN', 0, 1)
-    ''', (demo_pw, demo_ans))
-    demo_user_id = cursor.lastrowid
+        CREATE TABLE IF NOT EXISTS auth_sessions (
+            token_hash TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            expires_at TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+        )
+    ''')
 
-    amlodipine_img = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200' viewBox='0 0 200 200'><rect width='200' height='200' fill='%23f0fdf4' rx='16'/><circle cx='100' cy='100' r='50' fill='%23166534'/><line x1='100' y1='50' x2='100' y2='150' stroke='white' stroke-width='4'/><text x='100' y='180' font-size='14' text-anchor='middle' fill='%23166534' font-family='sans-serif' font-weight='bold'>Amlodipine 5mg</text></svg>"
-    metformin_img = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200' viewBox='0 0 200 200'><rect width='200' height='200' fill='%23fef3c7' rx='16'/><rect x='40' y='75' width='120' height='50' rx='25' fill='%23d97706'/><text x='100' y='180' font-size='14' text-anchor='middle' fill='%2392400e' font-family='sans-serif' font-weight='bold'>Metformin 500mg</text></svg>"
-    atorvastatin_img = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200' viewBox='0 0 200 200'><rect width='200' height='200' fill='%23dcfce7' rx='16'/><circle cx='100' cy='100' r='45' fill='%2316a34a'/><path d='M75 100 L125 100' stroke='white' stroke-width='3'/><text x='100' y='180' font-size='14' text-anchor='middle' fill='%2315803d' font-family='sans-serif' font-weight='bold'>Atorvastatin 10mg</text></svg>"
-    multivitamin_img = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200' viewBox='0 0 200 200'><rect width='200' height='200' fill='%23f3e8ff' rx='16'/><rect x='45' y='80' width='110' height='40' rx='20' fill='%239333ea'/><text x='100' y='180' font-size='14' text-anchor='middle' fill='%236b21a8' font-family='sans-serif' font-weight='bold'>Multivitamin</text></svg>"
-
-    medicines = [
-        (demo_user_id, "Amlodipine", "5 mg (1 Tablet)", "Morning - 8:00 AM", "Take after breakfast with water for Blood Pressure.", amlodipine_img, "Upcoming", "Daily", "After breakfast"),
-        (demo_user_id, "Metformin", "500 mg (1 Tablet)", "Afternoon - 1:00 PM", "Take with lunch for Blood Sugar control.", metformin_img, "Upcoming", "Daily", "With lunch"),
-        (demo_user_id, "Atorvastatin", "10 mg (1 Tablet)", "Night - 9:00 PM", "Take before bed for Cholesterol.", atorvastatin_img, "Upcoming", "Daily", "Before bed"),
-        (demo_user_id, "Multivitamin", "1 Capsule", "Morning - 8:30 AM", "Take after morning meal with water.", multivitamin_img, "Taken", "Daily", "After breakfast")
-    ]
-
-    cursor.executemany('''
-        INSERT INTO medicines (user_id, name, dosage, time_slot, instructions, image_url, status, frequency, before_after_food)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', medicines)
-
-    today_str = datetime.now().strftime("%Y-%m-%d")
-    med_logs = [
-        (demo_user_id, 4, "Multivitamin", "1 Capsule", "Taken", "08:30 AM", "08:32 AM", today_str),
-        (demo_user_id, 1, "Amlodipine", "5 mg", "Taken", "08:00 AM", "08:04 AM", (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")),
-        (demo_user_id, 2, "Metformin", "500 mg", "Taken", "01:00 PM", "01:10 PM", (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")),
-        (demo_user_id, 3, "Atorvastatin", "10 mg", "Skipped", "09:00 PM", "09:15 PM", (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d"))
-    ]
-
-    cursor.executemany('''
-        INSERT INTO medicine_logs (user_id, medicine_id, medicine_name, dosage, status, scheduled_time, actual_time, date)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    ''', med_logs)
-
-    reports = [
-        (demo_user_id, "Complete Blood Count (CBC)", "2026-09-15", "Hemoglobin: 13.5 g/dL (Normal). WBC: 6,800 /mcL. Platelets: 250,000 /mcL. Overall cell count is healthy.", "Dr. R. Sharma", "cbc_report_sep.pdf", "WBC: 6.8, RBC: 4.5, Hb: 13.5, Platelets: 250k"),
-        (demo_user_id, "HbA1c Glucose Test", "2026-09-10", "HbA1c level: 6.4%. Indicates good glycemic control with current Metformin medication.", "Dr. K. Patel", "hba1c_sep.pdf", "HbA1c: 6.4%, Fasting Glucose: 110 mg/dL"),
-        (demo_user_id, "Lipid Profile Report", "2026-08-28", "Total Cholesterol: 185 mg/dL. HDL: 48 mg/dL. LDL: 110 mg/dL (Desirable). Heart risk low.", "Dr. R. Sharma", "lipid_profile.pdf", "Total Cholesterol: 185, HDL: 48, LDL: 110, Triglycerides: 135")
-    ]
-
-    cursor.executemany('''
-        INSERT INTO reports (user_id, title, date, summary, doctor_name, file_path, extracted_text)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    ''', reports)
-
-    diet_plans = [
-        (demo_user_id, "Breakfast", "Oatmeal with sliced banana, almonds, and low-fat milk", 320, "High fiber, good for blood pressure & sugar control"),
-        (demo_user_id, "Lunch", "Brown rice, lentil dal, spinach curry, and fresh curd", 450, "Balanced protein and complex carbohydrates"),
-        (demo_user_id, "Evening Snack", "Green tea with roasted chana (chickpeas)", 120, "Antioxidant rich light snack"),
-        (demo_user_id, "Dinner", "2 Multigrain rotis with bottle gourd (lauki) vegetable soup", 310, "Light and easy to digest before bedtime")
-    ]
-
-    cursor.executemany('''
-        INSERT INTO diet_plans (user_id, meal_time, food_item, calories, notes)
-        VALUES (?, ?, ?, ?, ?)
-    ''', diet_plans)
-
-    reminders = [
-        (demo_user_id, 1, "Amlodipine", "5 mg", "08:00 AM", "Active"),
-        (demo_user_id, 2, "Metformin", "500 mg", "01:00 PM", "Active"),
-        (demo_user_id, 3, "Atorvastatin", "10 mg", "09:00 PM", "Active")
-    ]
-
-    cursor.executemany('''
-        INSERT INTO reminders (user_id, medicine_id, medicine_name, dosage, reminder_time, status)
-        VALUES (?, ?, ?, ?, ?, ?)
-    ''', reminders)
-
-    now = datetime.now()
-    dates = [(now - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7)]
-    dates.reverse()
-
-    bp_values = ["122/80", "120/80", "124/82", "118/78", "121/79", "119/80", "120/80"]
-    sugar_values = ["102", "100", "99", "97", "98", "96", "98"]
-    weight_values = ["69.0", "68.8", "68.7", "68.6", "68.5", "68.5", "68.5"]
-
-    health_metrics = []
-    for d, bp, sugar, weight in zip(dates, bp_values, sugar_values, weight_values):
-        health_metrics.append((demo_user_id, "Blood Pressure", bp, "mmHg", d, "08:00 AM", "Optimal", "Morning Reading"))
-        health_metrics.append((demo_user_id, "Blood Sugar", sugar, "mg/dL", d, "08:15 AM", "Normal", "Fasting"))
-        health_metrics.append((demo_user_id, "Weight", weight, "kg", d, "08:30 AM", "Healthy", "Morning Weight"))
-
-    cursor.executemany('''
-        INSERT INTO health_metrics (user_id, metric_name, value, unit, recorded_date, recorded_time, status, notes)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    ''', health_metrics)
-
-    family_members = [
-        (demo_user_id, "Priya Sharma", "Daughter", "+91 98765 43210", "Primary Caregiver"),
-        (demo_user_id, "Rajesh Kumar", "Son", "+91 98765 12345", "Emergency Contact")
-    ]
-
-    cursor.executemany('''
-        INSERT INTO family_members (user_id, name, relationship, phone, caregiver_status)
-        VALUES (?, ?, ?, ?, ?)
-    ''', family_members)
+    conn.commit()
+    conn.close()
 
 # AUTHENTICATION & USER MANAGEMENT
 
@@ -522,6 +420,69 @@ def get_user_by_id(user_id):
     row = cursor.fetchone()
     conn.close()
     return dict(row) if row else None
+
+
+def create_auth_session(user_id, lifetime_days=_AUTH_SESSION_LIFETIME_DAYS):
+    if not isinstance(lifetime_days, int) or lifetime_days < 1:
+        raise ValueError("Session lifetime must be a positive number of days.")
+    token = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    now = datetime.now(timezone.utc)
+    expires_at = (now + timedelta(days=lifetime_days)).isoformat(timespec="seconds")
+    conn = get_db_connection()
+    try:
+        with conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "DELETE FROM auth_sessions WHERE expires_at <= ?",
+                (now.isoformat(timespec="seconds"),),
+            )
+            cursor.execute(
+                "INSERT INTO auth_sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)",
+                (token_hash, user_id, expires_at),
+            )
+    finally:
+        conn.close()
+    return token
+
+
+def get_user_by_auth_session(token):
+    if not isinstance(token, str) or not token:
+        return None
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT users.*
+            FROM auth_sessions
+            JOIN users ON users.id = auth_sessions.user_id
+            WHERE auth_sessions.token_hash = ? AND auth_sessions.expires_at > ?
+            """,
+            (token_hash, now),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def revoke_auth_session(token):
+    if not isinstance(token, str) or not token:
+        return
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    conn = get_db_connection()
+    try:
+        with conn:
+            conn.execute(
+                "DELETE FROM auth_sessions WHERE token_hash = ?",
+                (token_hash,),
+            )
+    finally:
+        conn.close()
+
 
 # MEDICINES & SCHEDULES
 
